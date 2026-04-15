@@ -2,4 +2,24 @@
 title: "Final_Project_Code"
 output: html_document
 ---
+```{r setup}
+      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+```
+
+```{r}
+library(TCGAbiolinks)
+library(maftools)
+```
+
+```{r}
+clin_query <- GDCquery(project = "TCGA-SKCM",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'SKCM Biotab')
+# GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinicSKCM <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
+```
+
+
 

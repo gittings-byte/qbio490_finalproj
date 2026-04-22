@@ -3,10 +3,7 @@ title: "Final_Project_Code"
 output: html_document
 ---
 ```{r setup}
-# knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
-knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) 
-
-#      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+ #knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) #      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
       knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
 ```
 
@@ -52,9 +49,9 @@ clinic <- clinic %>%
   )
 ```
 ```{r}
-fit <- survfit(Surv(os_time, os_event) ~ 1, data = clinicSKCM)
+fit <- survfit(Surv(os_time, os_event) ~ 1, data = clinic)
 
-ggsurvplot(fit, data = clinicSKCM,
+ggsurvplot(fit, data = clinic,
            #risk.table = TRUE,
            conf.int   = TRUE,
            title      = "TCGA SKCM: Overall Survival",
@@ -69,28 +66,12 @@ Stacked Bar Plot
 ```
 
 random plot
-title: "Final_Project_Code"
-output: html_document
----
-```{r setup}
-#      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
-      knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
-```
 
 ```{r}
 library(TCGAbiolinks)
 library(maftools)
 ```
 
-```{r}
-clin_query <- GDCquery(project = "TCGA-SKCM",
-data.category = "Clinical",
-data.type = "Clinical Supplement",
-data.format = 'SKCM Biotab')
-# GDCdownload(clin_query)
-clinical.BCRtab.all <- GDCprepare(clin_query)
-clinicSKCM <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
-```
 
 boxplot of Breslow thickness across AJCC tumor stages (the one from the exit ticket but better verison)
 ```{r}
@@ -98,7 +79,7 @@ library(ggplot2)
 library(dplyr)
 
 # Clean the stage and Breslow columns
-breslow_clean <- clinicSKCM %>%
+breslow_clean <- clinic %>%
   filter(
     !is.na(ajcc_pathologic_tumor_stage),
     !is.na(breslow_thickness_at_diagnosis),
@@ -132,7 +113,7 @@ Patient count by stage and vital status
 library(ggplot2)
 library(dplyr)
 
-stage_survival <- clinicSKCM %>%
+stage_survival <- clinic %>%
   filter(
     !is.na(ajcc_pathologic_tumor_stage),
     !ajcc_pathologic_tumor_stage %in% c("[Not Available]", "[Discrepancy]", 

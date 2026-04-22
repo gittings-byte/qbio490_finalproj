@@ -3,12 +3,15 @@ title: "Final_Project_Code"
 output: html_document
 ---
 ```{r setup}
-      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+# knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) 
+
 ```
 
 ```{r}
 library(TCGAbiolinks)
 library(maftools)
+library(ggplot2)
 ```
 
 ```{r}
@@ -18,8 +21,55 @@ data.type = "Clinical Supplement",
 data.format = 'SKCM Biotab')
 # GDCdownload(clin_query)
 clinical.BCRtab.all <- GDCprepare(clin_query)
-clinicSKCM <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
+clinic <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
 ```
+
+```{r}
+ggplot(clinic, aes(x = ajcc_pathologic_tumor_stage)) + geom_bar()
+```
+
+```{r}
+library(dplyr)
+library(survival)
+library(survminer)
+
+colnames(clinic)
+```
+```{r}
+
+clinic <- clinic %>%
+  mutate(
+    death_days_to        = as.numeric(death_days_to),
+    last_contact_days_to = as.numeric(last_contact_days_to),
+    age_at_diagnosis     = as.numeric(age_at_diagnosis),
+    breslow_thickness_at_diagnosis = as.numeric(breslow_thickness_at_diagnosis),
+    
+    # Unified survival time: use death days if dead, otherwise last contact
+    os_time  = ifelse(!is.na(death_days_to), death_days_to, last_contact_days_to),
+    os_event = ifelse(vital_status == "Dead", 1, 0)
+  )
+```
+```{r}
+fit <- survfit(Surv(os_time, os_event) ~ 1, data = clinicSKCM)
+
+ggsurvplot(fit, data = clinicSKCM,
+           #risk.table = TRUE,
+           conf.int   = TRUE,
+           title      = "TCGA SKCM: Overall Survival",
+           xlab       = "Days",
+           ylab       = "Survival Probability")
+```
+
+
+Stacked Bar Plot 
+```{r}
+
+```
+
+
+
+
+
 
 
 

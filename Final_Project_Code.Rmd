@@ -3,12 +3,14 @@ title: "Final_Project_Code"
 output: html_document
 ---
 ```{r setup}
-      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+ #knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) #      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+      knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
 ```
 
 ```{r}
 library(TCGAbiolinks)
 library(maftools)
+library(ggplot2)
 ```
 
 ```{r}
@@ -18,7 +20,7 @@ data.type = "Clinical Supplement",
 data.format = 'SKCM Biotab')
 # GDCdownload(clin_query)
 clinical.BCRtab.all <- GDCprepare(clin_query)
-clinicSKCM <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
+clinic <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
 ```
 
 ```{r Exercise 4.2}
@@ -36,7 +38,117 @@ plot(jitter(clinicSKCM_scatter$stage_simple, amount = 0.1), clinicSKCM_scatter$a
      ylab = "Age at Diagnosis",
      main = "Scatterplot of Age vs Tumor Stage",
      pch = 19)
+```{r}
+ggplot(clinic, aes(x = ajcc_pathologic_tumor_stage)) + geom_bar()
+```
+
+```{r}
+library(dplyr)
+library(survival)
+library(survminer)
+
+colnames(clinic)
+```
+```{r}
+
+clinic <- clinic %>%
+  mutate(
+    death_days_to        = as.numeric(death_days_to),
+    last_contact_days_to = as.numeric(last_contact_days_to),
+    age_at_diagnosis     = as.numeric(age_at_diagnosis),
+    breslow_thickness_at_diagnosis = as.numeric(breslow_thickness_at_diagnosis),
+    
+    # Unified survival time: use death days if dead, otherwise last contact
+    os_time  = ifelse(!is.na(death_days_to), death_days_to, last_contact_days_to),
+    os_event = ifelse(vital_status == "Dead", 1, 0)
+  )
+```
+```{r}
+fit <- survfit(Surv(os_time, os_event) ~ 1, data = clinic)
+
+ggsurvplot(fit, data = clinic,
+           #risk.table = TRUE,
+           conf.int   = TRUE,
+           title      = "TCGA SKCM: Overall Survival",
+           xlab       = "Days",
+           ylab       = "Survival Probability")
+```
+
+
+Stacked Bar Plot 
+```{r}
+
+```
+
+random plot
+
+```{r}
+library(TCGAbiolinks)
+library(maftools)
+```
+
+
+boxplot of Breslow thickness across AJCC tumor stages (the one from the exit ticket but better verison)
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Clean the stage and Breslow columns
+breslow_clean <- clinic %>%
+  filter(
+    !is.na(ajcc_pathologic_tumor_stage),
+    !is.na(breslow_thickness_at_diagnosis),
+    breslow_thickness_at_diagnosis > 0,
+    !ajcc_pathologic_tumor_stage %in% c("[Not Available]", "[Discrepancy]", 
+                                         "[Unknown]", ""),
+    !breslow_thickness_at_diagnosis %in% c("[Not Available]", "[Unknown]", "")
+  ) %>%
+  mutate(
+    breslow_thickness_at_diagnosis = as.numeric(breslow_thickness_at_diagnosis),
+    # Simplify stage to I, II, III, IV (strip substage letters like IA, IIB, etc.)
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_tumor_stage),
+    stage_simple = gsub("[ABC]$", "", stage_simple),
+    stage_simple = factor(stage_simple, levels = c("I", "II", "III", "IV"))
+  ) %>%
+  filter(!is.na(stage_simple), !is.na(breslow_thickness_at_diagnosis))
+
+ggplot(breslow_clean, aes(x = stage_simple, y = breslow_thickness_at_diagnosis, 
+                           fill = stage_simple)) +
+  geom_boxplot(outlier.shape = 21, outlier.alpha = 0.5) +
+  scale_fill_manual(values = c("I" = "blue", "II" = "red", 
+                                "III" = "pink", "IV" = "green")) +
+  scale_y_log10() +   # log scale because Breslow thickness is right-skewed
+  xlab("AJCC Tumor Stage") +
+  ylab("Breslow Thickness at Diagnosis (mm, log scale)") +
+  ggtitle("Tumor Invasion Depth Across SKCM Stages")
+```
+
+Patient count by stage and vital status
+```{r}
+library(ggplot2)
+library(dplyr)
+
+stage_survival <- clinic %>%
+  filter(
+    !is.na(ajcc_pathologic_tumor_stage),
+    !ajcc_pathologic_tumor_stage %in% c("[Not Available]", "[Discrepancy]", 
+                                         "[Unknown]", ""),
+    !is.na(vital_status),
+    !vital_status %in% c("[Not Available]", "[Unknown]", "")
+  ) %>%
+  mutate(
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_tumor_stage),
+    stage_simple = gsub("[ABC]$", "", stage_simple),
+    stage_simple = factor(stage_simple, levels = c("I", "II", "III", "IV")),
+    vital_status = factor(vital_status, levels = c("Alive", "Dead"))
+  ) %>%
+  filter(!is.na(stage_simple))
 
 axis(1, at = c(1, 2, 3, 4), labels = c("Stage I", "Stage II", "Stage III", "Stage IV"))
 ```
+
+
+
+
+
 

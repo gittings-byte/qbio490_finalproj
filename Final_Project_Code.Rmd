@@ -23,6 +23,21 @@ clinical.BCRtab.all <- GDCprepare(clin_query)
 clinic <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
 ```
 
+```{r Exercise 4.2}
+clinicSKCM$stage_simple <- ifelse(grepl("^Stage IV", clinicSKCM$ajcc_pathologic_tumor_stage), 4,
+                           ifelse(grepl("^Stage III", clinicSKCM$ajcc_pathologic_tumor_stage), 3,
+                           ifelse(grepl("^Stage II", clinicSKCM$ajcc_pathologic_tumor_stage), 2,
+                           ifelse(grepl("^Stage I($|[^VIX])", clinicSKCM$ajcc_pathologic_tumor_stage), 1, NA))))
+
+clinicSKCM$age <- as.numeric(clinicSKCM$age_at_diagnosis)
+
+clinicSKCM_scatter <- clinicSKCM[!is.na(clinicSKCM$stage_simple) & !is.na(clinicSKCM$age), ]
+
+plot(jitter(clinicSKCM_scatter$stage_simple, amount = 0.1), clinicSKCM_scatter$age,
+     xlab = "Tumor Stage",
+     ylab = "Age at Diagnosis",
+     main = "Scatterplot of Age vs Tumor Stage",
+     pch = 19)
 ```{r}
 ggplot(clinic, aes(x = ajcc_pathologic_tumor_stage)) + geom_bar()
 ```
@@ -129,15 +144,7 @@ stage_survival <- clinic %>%
   ) %>%
   filter(!is.na(stage_simple))
 
-ggplot(stage_survival, aes(x = stage_simple, fill = vital_status)) +
-  geom_bar(position = "stack") +
-  scale_fill_manual(
-    values = c("Alive" = "pink", "Dead" = "seagreen"),
-    name = "Vital Status"
-  ) +
-  xlab("AJCC Tumor Stage") +
-  ylab("Number of Patients") +
-  ggtitle("SKCM Patient Count and Survival Outcome by Tumor Stage") 
+axis(1, at = c(1, 2, 3, 4), labels = c("Stage I", "Stage II", "Stage III", "Stage IV"))
 ```
 
 

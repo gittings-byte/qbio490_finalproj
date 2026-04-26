@@ -4,8 +4,8 @@ output: html_document
 ---
 ```{r setup}
  #knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) 
-knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
-#       knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
+#knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+       knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
 ```
 
 ```{r}
@@ -32,8 +32,7 @@ library(maftools)
 library(TCGAbiolinks)
 library(ggplot2)
 
-clinical <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
-clinical$Tumor_Sample_Barcode <- clinical$bcr_patient_barcode
+clinic$Tumor_Sample_Barcode <- clinic$bcr_patient_barcode
 
 maf_query <- GDCquery(
   project = 'TCGA-SKCM',
@@ -69,16 +68,16 @@ maf_object <- readRDS("/home1/emmashih/490_cluster/analysis_data/skcm_maf_object
 
 
 ```{r Exercise 4.2}
-clinicSKCM$stage_simple <- ifelse(grepl("^Stage IV", clinicSKCM$ajcc_pathologic_tumor_stage), 4,
-                           ifelse(grepl("^Stage III", clinicSKCM$ajcc_pathologic_tumor_stage), 3,
-                           ifelse(grepl("^Stage II", clinicSKCM$ajcc_pathologic_tumor_stage), 2,
-                           ifelse(grepl("^Stage I($|[^VIX])", clinicSKCM$ajcc_pathologic_tumor_stage), 1, NA))))
+clinic$stage_simple <- ifelse(grepl("^Stage IV", clinic$ajcc_pathologic_tumor_stage), 4,
+                           ifelse(grepl("^Stage III", clinic$ajcc_pathologic_tumor_stage), 3,
+                           ifelse(grepl("^Stage II", clinic$ajcc_pathologic_tumor_stage), 2,
+                           ifelse(grepl("^Stage I($|[^VIX])", clinic$ajcc_pathologic_tumor_stage), 1, NA))))
 
-clinicSKCM$age <- as.numeric(clinicSKCM$age_at_diagnosis)
+clinic$age <- as.numeric(clinic$age_at_diagnosis)
 
-clinicSKCM_scatter <- clinicSKCM[!is.na(clinicSKCM$stage_simple) & !is.na(clinicSKCM$age), ]
+clinic_scatter <- clinic[!is.na(clinic$stage_simple) & !is.na(clinic$age), ]
 
-plot(jitter(clinicSKCM_scatter$stage_simple, amount = 0.1), clinicSKCM_scatter$age,
+plot(jitter(clinic_scatter$stage_simple, amount = 0.1), clinic_scatter$age,
      xlab = "Tumor Stage",
      ylab = "Age at Diagnosis",
      main = "Scatterplot of Age vs Tumor Stage",
@@ -164,10 +163,12 @@ ggplot(breslow_clean, aes(x = stage_simple, y = breslow_thickness_at_diagnosis,
 ```
 
 Patient count by stage and vital status
+
 ```{r}
 library(ggplot2)
 library(dplyr)
 
+# Data preparation
 stage_survival <- clinic %>%
   filter(
     !is.na(ajcc_pathologic_tumor_stage),
@@ -179,14 +180,40 @@ stage_survival <- clinic %>%
   mutate(
     stage_simple = gsub("Stage ", "", ajcc_pathologic_tumor_stage),
     stage_simple = gsub("[ABC]$", "", stage_simple),
+    stage_simple = trimws(stage_simple),
     stage_simple = factor(stage_simple, levels = c("I", "II", "III", "IV")),
     vital_status = factor(vital_status, levels = c("Alive", "Dead"))
   ) %>%
   filter(!is.na(stage_simple))
 
-axis(1, at = c(1, 2, 3, 4), labels = c("Stage I", "Stage II", "Stage III", "Stage IV"))
-```
+# Calculate percentages
+stage_pct <- stage_survival %>%
+  count(stage_simple, vital_status) %>%
+  group_by(stage_simple) %>%
+  mutate(
+    pct = n / sum(n) * 100,
+    label = paste0(round(pct, 1), "%")
+  )
 
+# Plot
+ggplot(stage_pct, aes(x = stage_simple, y = n, fill = vital_status)) +
+  geom_bar(stat = "identity") +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 3.5,
+    color = "black",
+    fontface = "bold"
+  ) +
+  scale_fill_manual(values = c("Alive" = "pink", "Dead" = "seagreen"),
+                    name = "Vital Status") +
+  labs(
+    title = "SKCM Patient Count and Survival Outcome by Tumor Stage",
+    x = "AJCC Tumor Stage",
+    y = "Number of Patients"
+  ) +
+  theme_gray()
+```
 
 
 

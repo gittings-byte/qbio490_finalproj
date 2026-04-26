@@ -3,8 +3,9 @@ title: "Final_Project_Code"
 output: html_document
 ---
 ```{r setup}
- #knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) #      knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
-      knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
+ #knitr::opts_knit$set(root.dir = normalizePath("/home1/gittings/490_cluster/analysis_data")) 
+knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+#       knitr::opts_knit$set(root.dir = normalizePath("/home1/spoden/490_cluster/analysis_data")) 
 ```
 
 ```{r}
@@ -14,6 +15,7 @@ library(ggplot2)
 ```
 
 ```{r}
+# code to download and load CLINICAL DATA
 clin_query <- GDCquery(project = "TCGA-SKCM",
 data.category = "Clinical",
 data.type = "Clinical Supplement",
@@ -22,6 +24,49 @@ data.format = 'SKCM Biotab')
 clinical.BCRtab.all <- GDCprepare(clin_query)
 clinic <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
 ```
+
+```{r}
+# code to download METHYLATION DATA (code to load data below this chunk)
+library(BiocManager)
+library(maftools)
+library(TCGAbiolinks)
+library(ggplot2)
+
+clinical <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
+clinical$Tumor_Sample_Barcode <- clinical$bcr_patient_barcode
+
+maf_query <- GDCquery(
+  project = 'TCGA-SKCM',
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+# GDCdownload(maf_query)
+setwd("/home1/emmashih/490_cluster/analysis_data")
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf, clinicalData = clinical, isTCGA = TRUE)
+
+
+# ill resave the clinical dataframe and maf object from today
+write.csv(x = clinical,
+          file = "skcm_clinical_data.csv", row.names = F)
+
+saveRDS(maf_object,
+        file = "skcm_maf_object.RDS")
+```
+
+```{r}
+# code to LOAD data
+# load clinical data
+clinical <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
+
+# load maf object
+maf_object <- readRDS("/home1/emmashih/490_cluster/analysis_data/skcm_maf_object.RDS")
+```
+
+
 
 ```{r Exercise 4.2}
 clinicSKCM$stage_simple <- ifelse(grepl("^Stage IV", clinicSKCM$ajcc_pathologic_tumor_stage), 4,
@@ -74,11 +119,6 @@ ggsurvplot(fit, data = clinic,
            ylab       = "Survival Probability")
 ```
 
-
-Stacked Bar Plot 
-```{r}
-
-```
 
 random plot
 

@@ -1,0 +1,461 @@
+
+**** IRNORE CODE LINES 1-55. DATA AND VALUE LOADINGS ARE LINE 57*****
+4/21 in class work with chris
+
+re downloading/querying maf data
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/emmashih/490_cluster/analysis_data")) 
+```
+
+```{r}
+library(BiocManager)
+library(maftools)
+library(TCGAbiolinks)
+library(ggplot2)
+
+clinical <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
+clinical$Tumor_Sample_Barcode <- clinical$bcr_patient_barcode
+
+maf_query <- GDCquery(
+  project = 'TCGA-SKCM',
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+# GDCdownload(maf_query)
+setwd("/home1/emmashih/490_cluster/analysis_data")
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf, clinicalData = clinical, isTCGA = TRUE)
+
+
+# ill resave the clinical dataframe and maf object from today
+write.csv(x = clinical,
+          file = "skcm_clinical_data.csv", row.names = F)
+
+saveRDS(maf_object,
+        file = "skcm_maf_object.RDS")
+
+```
+
+
+subset maf
+```{r}
+
+read in maf
+
+#1. follow the intro to maf HW
+- get the relevant Tumor_Sample_Barcode 
+- you would have 2 vectors containing barcodes of patients in Stage I/II and Stage III/IV (ask claude or chat about using regular expression or GREP)
+- use subsetMaf() function and provide it with the barcodes of either group to make your two subsetted maf objects
+- run colollipop
+
+```
+
+```{r}
+#run this initial block of code to get started. ignore above code.
+library(BiocManager)
+library(maftools)
+library(TCGAbiolinks)
+library(ggplot2)
+    # code to LOAD data
+    # load clinical data
+clinic <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
+
+    # load maf object
+maf_object <- readRDS("/home1/emmashih/490_cluster/analysis_data/skcm_maf_object.RDS")
+
+    #subsetting stage II and stage III mafs
+
+    # get barcodes for Stage II patients only
+stage_II_barcodes <- clinic$Tumor_Sample_Barcode[
+  grepl("StageIA|Stage IIB|Stage IIC|Stage II$", 
+        clinic$ajcc_pathologic_tumor_stage, ignore.case = TRUE)
+]
+
+    # get barcodes for Stage III patients only
+stage_III_barcodes <- clinic$Tumor_Sample_Barcode[
+  grepl("Stage IIIA|Stage IIIB|Stage IIIC|Stage III$", 
+        clinic$ajcc_pathologic_tumor_stage, ignore.case = TRUE)
+]
+
+    # subset maf objects for each group
+maf_stage_II <- subsetMaf(maf = maf_object, tsb = stage_II_barcodes)
+maf_stage_III <- subsetMaf(maf = maf_object, tsb = stage_III_barcodes)
+
+```
+
+```{r}
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "MMP16",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+head(clinical$Tumor_Sample_Barcode)
+unique(clinical$ajcc_pathologic_stage)
+```
+
+```{r}
+rna_query <- GDCquery(
+  project = "TCGA-SKCM",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+#GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+saveRDS(rna_se, file = "/home1/emmashih/490_cluster/analysis_data/skcm_rna_se.RDS")
+```
+
+```{r}
+library(SummarizedExperiment)
+rna_counts <- assay(rna_se, "unstranded")  # the expression matrix
+rna_genes <- rowData(rna_se)               # gene info
+rna_clinical <- colData(rna_se)            # patient info
+```
+```{r}
+# oncoplot for Stage II
+oncoplot(maf = maf_stage_II,
+         top = 10)
+
+# oncoplot for Stage III
+oncoplot(maf = maf_stage_III,
+         top = 10)
+```
+```{r}
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "LRP1B",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "RP1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "PKHD1L1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "APOB",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "MXRA5",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+```
+```{r}
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "HAPLN1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+```
+``` {r}
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "TP53AIP1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "P2RX5",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "DNAJC5B",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "FCRL4",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+```{r}
+# oncoplot for Stage II
+oncoplot(maf = maf_stage_II,
+         genes = c("TP53AIP1", "P2RX5", "DNAJC5B", "C7", "FCRL4" ))
+
+# oncoplot for Stage III
+oncoplot(maf = maf_stage_III,
+         genes = c("TP53AIP1", "P2RX5", "DNAJC5B", "C7", "FCRL4" ))
+
+```
+```{r}
+# Contingency table / fisher's exact test
+PTEN_maf = subsetMaf(maf = maf_object, genes = "PTEN")
+
+mutationStatus <- ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% PTEN_maf@clinical.data$Tumor_Sample_Barcode, "mutation", "no_mutation")
+contingencyTable <- table(mutationStatus)
+
+mosaicplot(contingencyTable)
+```
+```{r}
+fisher.test(contingencyTable)
+```
+```{r}
+# run lollipop plots for each group
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "FOXQ1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+```
+```{r}
+# pick your gene
+gene_of_interest <- "FOXQ1"
+
+# get mutated patient barcodes for each stage
+gene_mutated <- unique(maf_object@data$Tumor_Sample_Barcode[
+  maf_object@data$Hugo_Symbol == gene_of_interest
+])
+
+# count mutated vs unmutated in each stage
+stage_II_mutated <- sum(stage_II_barcodes %in% gene_mutated)
+stage_II_unmutated <- length(stage_II_barcodes) - stage_II_mutated
+
+stage_III_mutated <- sum(stage_III_barcodes %in% gene_mutated)
+stage_III_unmutated <- length(stage_III_barcodes) - stage_III_mutated
+
+# build contingency table
+contingency_table <- matrix(
+  c(stage_II_mutated, stage_II_unmutated,
+    stage_III_mutated, stage_III_unmutated),
+  nrow = 2,
+  dimnames = list(
+    c("Mutated", "Unmutated"),
+    c("Stage II", "Stage III")
+  )
+)
+
+print(contingency_table)
+
+# run fisher's exact test
+fisher_result <- fisher.test(contingency_table)
+print(fisher_result)
+```
+
+```{r}
+#TP53A1
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "TP53AIP1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#TENM2
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "TENM2",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+```{r}
+# TENM2
+# pick your gene
+gene_of_interest <- "TENM2"
+
+# get mutated patient barcodes for each stage
+gene_mutated <- unique(maf_object@data$Tumor_Sample_Barcode[
+  maf_object@data$Hugo_Symbol == gene_of_interest
+])
+
+# count mutated vs unmutated in each stage
+stage_II_mutated <- sum(stage_II_barcodes %in% gene_mutated)
+stage_II_unmutated <- length(stage_II_barcodes) - stage_II_mutated
+
+stage_III_mutated <- sum(stage_III_barcodes %in% gene_mutated)
+stage_III_unmutated <- length(stage_III_barcodes) - stage_III_mutated
+
+# build contingency table
+contingency_table <- matrix(
+  c(stage_II_mutated, stage_II_unmutated,
+    stage_III_mutated, stage_III_unmutated),
+  nrow = 2,
+  dimnames = list(
+    c("Mutated", "Unmutated"),
+    c("Stage II", "Stage III")
+  )
+)
+
+print(contingency_table)
+
+# run fisher's exact test
+fisher_result <- fisher.test(contingency_table)
+print(fisher_result)
+```
+
+
+```{r}
+#SYT8
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "SYT8",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#ANXA8
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "ANXA8",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#CLCA2
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "CLCA2",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#CASP14
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "CASP14",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+```{r}
+#KLK5
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KLK5",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+```{r}
+#KRT6C
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT6C",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#KRT5
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT5",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#KRT1
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#KRT6B
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT6B",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+
+```{r}
+#KRT16
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT16",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+```{r}
+#KRT6A
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT6A",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+```{r}
+#KRT14
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT14",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+
+```{r}
+#KRT17
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "KRT17",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+
+```
+

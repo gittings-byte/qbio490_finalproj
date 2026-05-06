@@ -25,73 +25,12 @@ clinical.BCRtab.all <- GDCprepare(clin_query)
 clinic <- clinical.BCRtab.all$clinical_patient_skcm[-c(1,2),]
 ```
 
-```{r}
-# code to download METHYLATION DATA (code to load data below this chunk)
-library(BiocManager)
-library(maftools)
-library(TCGAbiolinks)
-library(ggplot2)
 
-clinic$Tumor_Sample_Barcode <- clinic$bcr_patient_barcode
-
-maf_query <- GDCquery(
-  project = 'TCGA-SKCM',
-  data.category = "Simple Nucleotide Variation",
-  access = "open",
-  data.type = "Masked Somatic Mutation",
-  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
-)
-
-# GDCdownload(maf_query)
-setwd("/home1/emmashih/490_cluster/analysis_data")
-maf <- GDCprepare(maf_query)
-maf_object <- read.maf(maf = maf, clinicalData = clinical, isTCGA = TRUE)
-
-
-# ill resave the clinical dataframe and maf object from today
-write.csv(x = clinical,
-          file = "skcm_clinical_data.csv", row.names = F)
-
-saveRDS(maf_object,
-        file = "skcm_maf_object.RDS")
-```
-
-```{r}
-# code to LOAD data
-# load clinical data
-clinical <- read.csv("/home1/emmashih/490_cluster/analysis_data/skcm_clinical_data.csv")
-
-# load maf object
-maf_object <- readRDS("/home1/emmashih/490_cluster/analysis_data/skcm_maf_object.RDS")
-```
-
-
-
-```{r Exercise 4.2}
-clinic$stage_simple <- ifelse(grepl("^Stage IV", clinic$ajcc_pathologic_tumor_stage), 4,
-                           ifelse(grepl("^Stage III", clinic$ajcc_pathologic_tumor_stage), 3,
-                           ifelse(grepl("^Stage II", clinic$ajcc_pathologic_tumor_stage), 2,
-                           ifelse(grepl("^Stage I($|[^VIX])", clinic$ajcc_pathologic_tumor_stage), 1, NA))))
-
-clinic$age <- as.numeric(clinic$age_at_diagnosis)
-
-clinic_scatter <- clinic[!is.na(clinic$stage_simple) & !is.na(clinic$age), ]
-
-plot(jitter(clinic_scatter$stage_simple, amount = 0.1), clinic_scatter$age,
-     xlab = "Tumor Stage",
-     ylab = "Age at Diagnosis",
-     main = "Scatterplot of Age vs Tumor Stage",
-     pch = 19)
-```{r}
-ggplot(clinic, aes(x = ajcc_pathologic_tumor_stage)) + geom_bar()
-```
 
 ```{r}
 library(dplyr)
 library(survival)
 library(survminer)
-
-colnames(clinic)
 ```
 ```{r}
 
@@ -118,57 +57,15 @@ ggsurvplot(fit, data = clinic,
            ylab       = "Survival Probability")
 ```
 
-
-random plot
-
-```{r}
-library(TCGAbiolinks)
-library(maftools)
-```
-
-
-boxplot of Breslow thickness across AJCC tumor stages (the one from the exit ticket but better verison)
-```{r}
-library(ggplot2)
-library(dplyr)
-
-# Clean the stage and Breslow columns
-breslow_clean <- clinic %>%
-  filter(
-    !is.na(ajcc_pathologic_tumor_stage),
-    !is.na(breslow_thickness_at_diagnosis),
-    breslow_thickness_at_diagnosis > 0,
-    !ajcc_pathologic_tumor_stage %in% c("[Not Available]", "[Discrepancy]", 
-                                         "[Unknown]", ""),
-    !breslow_thickness_at_diagnosis %in% c("[Not Available]", "[Unknown]", "")
-  ) %>%
-  mutate(
-    breslow_thickness_at_diagnosis = as.numeric(breslow_thickness_at_diagnosis),
-    # Simplify stage to I, II, III, IV (strip substage letters like IA, IIB, etc.)
-    stage_simple = gsub("Stage ", "", ajcc_pathologic_tumor_stage),
-    stage_simple = gsub("[ABC]$", "", stage_simple),
-    stage_simple = factor(stage_simple, levels = c("I", "II", "III", "IV"))
-  ) %>%
-  filter(!is.na(stage_simple), !is.na(breslow_thickness_at_diagnosis))
-
-ggplot(breslow_clean, aes(x = stage_simple, y = breslow_thickness_at_diagnosis, 
-                           fill = stage_simple)) +
-  geom_boxplot(outlier.shape = 21, outlier.alpha = 0.5) +
-  scale_fill_manual(values = c("I" = "blue", "II" = "red", 
-                                "III" = "pink", "IV" = "green")) +
-  scale_y_log10() +   # log scale because Breslow thickness is right-skewed
-  xlab("AJCC Tumor Stage") +
-  ylab("Breslow Thickness at Diagnosis (mm, log scale)") +
-  ggtitle("Tumor Invasion Depth Across SKCM Stages")
-```
-
 Patient count by stage and vital status
 
 ```{r}
 library(ggplot2)
 library(dplyr)
+count  <- dplyr::count
+select <- dplyr::select
+filter <- dplyr::filter
 
-# Data preparation
 stage_survival <- clinic %>%
   filter(
     !is.na(ajcc_pathologic_tumor_stage),
@@ -186,7 +83,6 @@ stage_survival <- clinic %>%
   ) %>%
   filter(!is.na(stage_simple))
 
-# Calculate percentages
 stage_pct <- stage_survival %>%
   count(stage_simple, vital_status) %>%
   group_by(stage_simple) %>%
@@ -195,7 +91,6 @@ stage_pct <- stage_survival %>%
     label = paste0(round(pct, 1), "%")
   )
 
-# Plot
 ggplot(stage_pct, aes(x = stage_simple, y = n, fill = vital_status)) +
   geom_bar(stat = "identity") +
   geom_text(
@@ -216,6 +111,796 @@ ggplot(stage_pct, aes(x = stage_simple, y = n, fill = vital_status)) +
 ```
 
 
+Ttranscriptomic volcano plot stages 2 to 3
 
+```{r} 
+library(TCGAbiolinks)
+library(limma)
+library(ggplot2)
+library(SummarizedExperiment)
+library(dplyr)
+
+# ── 1. Download & prepare (same as before) ────────────────────────────────────
+query_rna <- GDCquery(
+  project = "TCGA-SKCM",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+#GDCdownload(query_rna)
+rna_se <- GDCprepare(query_rna)
+
+# ── 2. Extract counts + metadata ──────────────────────────────────────────────
+counts_mat <- assay(rna_se, "unstranded")
+
+sample_meta <- as.data.frame(colData(rna_se)) %>%
+  mutate(
+    barcode = rownames(.),
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  ) %>%
+  filter(stage_simple %in% c("II", "III"),
+         !is.na(stage_simple))
+
+counts_sub <- counts_mat[, sample_meta$barcode]
+
+```
+
+```{r}
+# ── 3. Filter lowly expressed genes + log2 transform ─────────────────────────
+keep <- rowSums(counts_sub >= 10) >= 5
+counts_sub <- counts_sub[keep, ]
+
+mval <- t(apply(counts_sub, 1, function(x) log2(x + 1)))
+
+# ── 4. Fit limma model (Stage III vs Stage II) ────────────────────────────────
+sample_meta$is_stageIII <- sample_meta$stage_simple == "III"
+
+design <- model.matrix(~ is_stageIII, data = sample_meta)
+fit    <- lmFit(mval, design)
+fit2   <- eBayes(fit)
+
+# ── 5. Build results dataframe ────────────────────────────────────────────────
+dat <- data.frame(
+  foldchange = fit[["coefficients"]][, 2],
+  logPvalue  = -log10(p.adjust(fit2[["p.value"]][, 2], method = "BH")),
+  geneName   = rownames(counts_sub)
+)
+
+dat$threshold <- as.factor(abs(dat$foldchange) < 1)
+
+#name shit
+BiocManager::install("biomaRt")
+library(biomaRt)
+
+# Connect to Ensembl
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Strip the version number (the .22 part)
+ensembl_ids <- gsub("\\..*", "", dat$geneName)
+
+# Query for gene symbols
+gene_map <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters    = "ensembl_gene_id",
+  values     = ensembl_ids,
+  mart       = mart
+)
+
+# Map symbols back to dat
+dat$ensembl_clean <- gsub("\\..*", "", dat$geneName)
+dat <- left_join(dat, gene_map, by = c("ensembl_clean" = "ensembl_gene_id")) %>%
+  mutate(geneName = ifelse(hgnc_symbol == "" | is.na(hgnc_symbol), 
+                           ensembl_clean, hgnc_symbol))
+
+# ── 6. Volcano plot (same style as your homework) ─────────────────────────────
+library(ggrepel)
+
+# Add direction column
+dat <- dat %>%
+  mutate(direction = case_when(
+    foldchange >  1 & logPvalue > 2 ~ "Upregulated in III",
+    foldchange < -1 & logPvalue > 2 ~ "Downregulated in III",
+    TRUE ~ "Not significant"
+  ))
+
+sig_genes <- dat %>% filter(direction != "Not significant")
+
+# Force label specific genes of interest
+force_label <- dat %>% 
+  filter(geneName %in% c("FOXQ1", "TP53AIP1", "KRT14", "C7"))
+
+cols <- c("Upregulated in III"   = "firebrick",
+          "Downregulated in III" = "steelblue",
+          "Not significant"      = "grey70")
+
+ggplot(data = dat, aes(x = foldchange, y = logPvalue)) +
+  # Grey background dots first
+  geom_point(data = dat %>% filter(direction == "Not significant"),
+             aes(colour = direction), alpha = 0.2, size = 0.6) +
+  # Significant genes on top
+  geom_point(data = dat %>% filter(direction != "Not significant"),
+             aes(colour = direction), alpha = 0.9, size = 1.5) +
+  scale_colour_manual(values = cols) +
+  # Label only the forced genes
+  geom_text_repel(
+    data = force_label,
+    aes(label = geneName),
+    size = 3,
+    max.overlaps = 20,
+    box.padding = 0.5,
+    fontface = "bold"
+  ) +
+  geom_vline(xintercept =  1, colour = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = -1, colour = "darkred", linetype = "dashed") +
+  geom_hline(yintercept =  2, colour = "darkred", linetype = "dashed") +
+  xlab("Fold Change") +
+  ylab("-log10 p value") +
+  ggtitle("Volcano Plot: Stage III vs Stage II (TCGA-SKCM)") +
+  theme_bw() +
+  theme(legend.position = "top")
+```
+significant genes
+```{r}
+# Explicitly use dplyr's select
+dat %>%
+  filter(direction != "Not significant") %>%
+  dplyr::select(geneName, foldchange, logPvalue, direction) %>%
+  arrange(desc(logPvalue))
+```
+
+
+
+YES KEEP methylation volcano plot stages 2 to 3
+attempted volcano methylation plot
+
+```{r}
+library(TCGAbiolinks)
+library(limma)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+```
+
+```{r}
+if (!requireNamespace("remotes", quietly = TRUE)) {
+  install.packages("remotes")
+}
+library("remotes")
+remotes::install_github("BioinformaticsFMRP/TCGAbiolinks")
+library(TCGAbiolinks)
+```
+
+```{r}
+query_meth <- GDCquery(
+  project       = "TCGA-SKCM",
+  data.category = "DNA Methylation",
+  data.type     = "Methylation Beta Value",
+  platform      = "Illumina Human Methylation 450",
+  data.format   = "Dataframe"
+)
+
+#GDCdownload(query_meth, method = "api", files.per.chunk = 10)
+```
+
+```{r}
+methylation <- GDCprepare(query_meth)
+```
+
+```{r}
+methylation_clinical <- as.data.frame(methylation@colData)
+betas                <- as.data.frame(methylation@assays@data@listData)
+cpg_sites            <- as.data.frame(methylation@rowRanges@elementMetadata)
+```
+
+```{r}
+methylation_clinical <- methylation_clinical %>%
+  mutate(
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  )
+
+stage_mask <- methylation_clinical$stage_simple %in% c("II", "III") &
+              !is.na(methylation_clinical$stage_simple)
+
+methylation_clinical <- methylation_clinical[stage_mask, ]
+betas_clean          <- betas[, stage_mask]
+```
+
+```{r}
+site_mask <- !grepl("-", cpg_sites$gene) &
+             !grepl(";", cpg_sites$gene) &
+             !is.na(cpg_sites$gene) &
+             complete.cases(betas_clean)
+
+betas_clean <- betas_clean[site_mask, ]
+cpg_sites   <- cpg_sites[site_mask, ]
+```
+
+```{r}
+methylation_clinical$is_stageIII <- methylation_clinical$stage_simple == "III"
+
+mval   <- t(apply(betas_clean, 1, function(x) log2(x / (1 - x))))
+design <- model.matrix(~ is_stageIII, data = methylation_clinical)
+fit    <- lmFit(mval, design)
+fit2   <- eBayes(fit)
+```
+
+```{r}
+# Chunk 8: Build Results Dataframe
+dat_meth <- data.frame(
+  foldchange = fit[["coefficients"]][, 2],
+  logPvalue  = -log10(p.adjust(fit2[["p.value"]][, 2], method = "BH")),
+  geneName   = cpg_sites$gene
+)
+
+dat_meth <- dat_meth %>%
+  mutate(direction = case_when(
+    foldchange >  1 & logPvalue > 2 ~ "Hypermethylated in III",
+    foldchange < -1 & logPvalue > 2 ~ "Hypomethylated in III",
+    TRUE ~ "Not significant"
+  ))
+```
+
+
+```{r}
+# Chunk 9+10: Volcano Plot with Significant Sites + Transcriptomic Genes Highlighted
+sig_transcriptomic_genes <- dat %>%
+  filter(direction != "Not significant") %>%
+  pull(geneName)
+
+dat_meth <- dat_meth %>%
+  mutate(highlight = case_when(
+    geneName %in% sig_transcriptomic_genes & foldchange >  1 & logPvalue > 2 ~ "Hypermethylated + DE in III",
+    geneName %in% sig_transcriptomic_genes & foldchange < -1 & logPvalue > 2 ~ "Hypomethylated + DE in III",
+    geneName %in% sig_transcriptomic_genes ~ "DE gene (not diff methylated)",
+    direction == "Hypermethylated in III" ~ "Hypermethylated in III",
+    direction == "Hypomethylated in III"  ~ "Hypomethylated in III",
+    TRUE ~ "Not significant"
+  ))
+
+highlight_genes <- dat_meth %>% filter(highlight != "Not significant")
+
+cols_combined <- c(
+  "Hypermethylated + DE in III"   = "darkred",
+  "Hypomethylated + DE in III"    = "darkblue",
+  "DE gene (not diff methylated)" = "purple",
+  "Hypermethylated in III"        = "firebrick",
+  "Hypomethylated in III"         = "steelblue",
+  "Not significant"               = "grey70"
+)
+
+ggplot(data = dat_meth, aes(x = foldchange, y = logPvalue)) +
+  # Grey background dots first
+  geom_point(data = dat_meth %>% filter(highlight == "Not significant"),
+             aes(colour = highlight), alpha = 0.2, size = 0.6) +
+  # Highlighted genes on top
+  geom_point(data = dat_meth %>% filter(highlight != "Not significant"),
+             aes(colour = highlight), alpha = 0.9, size = 2) +
+  scale_colour_manual(values = cols_combined) +
+  geom_vline(xintercept =  1, colour = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = -1, colour = "darkred", linetype = "dashed") +
+  geom_hline(yintercept =  2, colour = "darkred", linetype = "dashed") +
+  xlab("Fold Change (M-value)") +
+  ylab("-log10 p value") +
+  ggtitle("Methylation Volcano Plot: Stage III vs Stage II (TCGA-SKCM)\nwith Significant Sites and Transcriptomic DE Genes Highlighted") +
+  theme_bw() +
+  theme(legend.position = "top")
+```
+
+
+```{r}
+# Install if needed
+BiocManager::install("IlluminaHumanMethylation450kanno.ilmn12.hg19")
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+# Get full annotation
+anno <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+
+# Look up cg17618595 specifically
+anno["cg17618595", c("Name", "UCSC_RefGene_Name", "UCSC_RefGene_Group", 
+                      "Relation_to_Island", "chr", "pos")]
+```
+
+
+
+another transcriptino volcano plot
+
+
+```{r}
+library(TCGAbiolinks)
+library(limma)
+library(ggplot2)
+library(SummarizedExperiment)
+library(dplyr)
+
+query_rna <- GDCquery(
+  project = "TCGA-SKCM",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+# GDCdownload(query_rna)
+rna_se <- GDCprepare(query_rna)
+
+counts_mat <- assay(rna_se, "unstranded")
+
+sample_meta <- as.data.frame(colData(rna_se)) %>%
+  mutate(
+    barcode = rownames(.),
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  ) %>%
+  filter(stage_simple %in% c("I", "II"),
+         !is.na(stage_simple))
+
+counts_sub <- counts_mat[, sample_meta$barcode]
+
+keep <- rowSums(counts_sub >= 10) >= 5
+counts_sub <- counts_sub[keep, ]
+mval <- t(apply(counts_sub, 1, function(x) log2(x + 1)))
+
+sample_meta$is_stageII <- sample_meta$stage_simple == "II"
+
+design <- model.matrix(~ is_stageII, data = sample_meta)
+fit    <- lmFit(mval, design)
+fit2   <- eBayes(fit)
+
+dat <- data.frame(
+  foldchange = fit[["coefficients"]][, 2],
+  logPvalue  = -log10(p.adjust(fit2[["p.value"]][, 2], method = "BH")),
+  geneName   = rownames(counts_sub)
+)
+dat$threshold <- as.factor(abs(dat$foldchange) < 1)
+
+library(org.Hs.eg.db)
+
+ensembl_ids <- gsub("\\..*", "", dat$geneName)
+
+gene_symbols <- mapIds(org.Hs.eg.db,
+                       keys      = ensembl_ids,
+                       column    = "SYMBOL",
+                       keytype   = "ENSEMBL",
+                       multiVals = "first")
+
+dat$geneName <- ifelse(is.na(gene_symbols), ensembl_ids, gene_symbols)
+
+library(ggrepel)
+
+dat <- dat %>%
+  mutate(direction = case_when(
+    foldchange >  1 & logPvalue > 2 ~ "Upregulated in II",
+    foldchange < -1 & logPvalue > 2 ~ "Downregulated in II",
+    TRUE ~ "Not significant"
+  ))
+
+sig_genes <- dat %>% filter(direction != "Not significant")
+
+force_label <- dat %>%
+  filter(geneName %in% c("FOXQ1"))
+
+cols <- c("Upregulated in II"   = "firebrick",
+          "Downregulated in II" = "steelblue",
+          "Not significant"     = "grey70")
+
+ggplot(data = dat, aes(x = foldchange, y = logPvalue)) +
+  geom_point(data = dat %>% filter(direction == "Not significant"),
+             aes(colour = direction), alpha = 0.2, size = 0.6) +
+  geom_point(data = dat %>% filter(direction != "Not significant"),
+             aes(colour = direction), alpha = 0.9, size = 1.5) +
+  scale_colour_manual(values = cols) +
+  geom_text_repel(
+    data = force_label,
+    aes(label = geneName),
+    size = 3,
+    max.overlaps = 20,
+    box.padding = 0.5,
+    fontface = "bold"
+  ) +
+  geom_vline(xintercept =  1, colour = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = -1, colour = "darkred", linetype = "dashed") +
+  geom_hline(yintercept =  2, colour = "darkred", linetype = "dashed") +
+  xlab("Fold Change") +
+  ylab("-log10 p value") +
+  ggtitle("Volcano Plot: Stage II vs Stage I (TCGA-SKCM)") +
+  theme_bw() +
+  theme(legend.position = "top")
+
+```
+YES KEEP - methylation volcano plot stages 1 to 2
+new volcano methylation plot
+```{r}
+library(TCGAbiolinks)
+library(limma)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+```
+
+```{r}
+if (!requireNamespace("remotes", quietly = TRUE)) {
+  install.packages("remotes")
+}
+library("remotes")
+remotes::install_github("BioinformaticsFMRP/TCGAbiolinks")
+```
+
+```{r}
+#query_meth <- GDCquery(
+  #project       = "TCGA-SKCM",
+  #data.category = "DNA Methylation",
+  #data.type     = "Methylation Beta Value",
+  #platform      = "Illumina Human Methylation 450",
+  #data.format   = "Dataframe"
+#)
+
+#GDCdownload(query_meth, method = "api", files.per.chunk = 10)
+```
+
+```{r}
+#methylation <- GDCprepare(query_meth)
+```
+
+```{r}
+methylation_clinical <- as.data.frame(methylation@colData)
+betas                <- as.data.frame(methylation@assays@data@listData)
+cpg_sites            <- as.data.frame(methylation@rowRanges@elementMetadata)
+```
+
+```{r}
+methylation_clinical <- methylation_clinical %>%
+  mutate(
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  )
+
+stage_mask <- methylation_clinical$stage_simple %in% c("I", "II") &
+              !is.na(methylation_clinical$stage_simple)
+
+methylation_clinical <- methylation_clinical[stage_mask, ]
+betas_clean          <- betas[, stage_mask]
+```
+
+```{r}
+site_mask <- !grepl("-", cpg_sites$gene) &
+             !grepl(";", cpg_sites$gene) &
+             !is.na(cpg_sites$gene) &
+             complete.cases(betas_clean)
+
+betas_clean <- betas_clean[site_mask, ]
+cpg_sites   <- cpg_sites[site_mask, ]
+```
+
+```{r}
+methylation_clinical$is_stageII <- methylation_clinical$stage_simple == "II"
+
+mval   <- t(apply(betas_clean, 1, function(x) log2(x / (1 - x))))
+design <- model.matrix(~ is_stageII, data = methylation_clinical)
+fit    <- lmFit(mval, design)
+fit2   <- eBayes(fit)
+```
+
+```{r}
+# Chunk 8: Build Results Dataframe - Stage II vs I
+dat_meth <- data.frame(
+  foldchange = fit[["coefficients"]][, 2],
+  logPvalue  = -log10(p.adjust(fit2[["p.value"]][, 2], method = "BH")),
+  geneName   = cpg_sites$gene
+)
+
+dat_meth <- dat_meth %>%
+  mutate(direction = case_when(
+    foldchange >  1 & logPvalue > 2 ~ "Hypermethylated in II",
+    foldchange < -1 & logPvalue > 2 ~ "Hypomethylated in II",
+    TRUE ~ "Not significant"
+  ))
+
+```
+
+```{r}
+# Chunk 9+10: Volcano Plot with Significant Sites Labeled + Transcriptomic Genes Highlighted
+sig_transcriptomic_genes <- dat %>%
+  filter(direction != "Not significant") %>%
+  pull(geneName)
+
+dat_meth <- dat_meth %>%
+  mutate(highlight = case_when(
+    geneName %in% sig_transcriptomic_genes & foldchange >  1 & logPvalue > 2 ~ "Hypermethylated + DE in II",
+    geneName %in% sig_transcriptomic_genes & foldchange < -1 & logPvalue > 2 ~ "Hypomethylated + DE in II",
+    geneName %in% sig_transcriptomic_genes ~ "DE gene (not diff methylated)",
+    direction == "Hypermethylated in II" ~ "Hypermethylated in II",
+    direction == "Hypomethylated in II"  ~ "Hypomethylated in II",
+    TRUE ~ "Not significant"
+  ))
+
+highlight_genes <- dat_meth %>% filter(highlight != "Not significant")
+
+cols_combined <- c(
+  "Hypermethylated + DE in II"    = "darkred",
+  "Hypomethylated + DE in II"     = "darkblue",
+  "DE gene (not diff methylated)" = "purple",
+  "Hypermethylated in II"         = "firebrick",
+  "Hypomethylated in II"          = "steelblue",
+  "Not significant"               = "grey70"
+)
+
+ggplot(data = dat_meth, aes(x = foldchange, y = logPvalue)) +
+  # Grey background dots
+  geom_point(data = dat_meth %>% filter(highlight == "Not significant"),
+             aes(colour = highlight), alpha = 0.2, size = 0.6) +
+  # Purple DE genes
+  geom_point(data = dat_meth %>% filter(highlight == "DE gene (not diff methylated)"),
+             aes(colour = highlight), alpha = 0.9, size = 2) +
+  # Significant methylation sites - bigger and on top
+  geom_point(data = dat_meth %>% filter(highlight %in% c("Hypomethylated in II",
+                                                          "Hypermethylated in II",
+                                                          "Hypomethylated + DE in II",
+                                                          "Hypermethylated + DE in II")),
+             aes(colour = highlight), alpha = 1, size = 4) +
+  scale_colour_manual(values = cols_combined) +
+  geom_vline(xintercept =  1, colour = "darkred", linetype = "dashed") +
+  geom_vline(xintercept = -1, colour = "darkred", linetype = "dashed") +
+  geom_hline(yintercept =  2, colour = "darkred", linetype = "dashed") +
+  xlab("Fold Change (M-value)") +
+  ylab("-log10 p value") +
+  ggtitle("Methylation Volcano Plot: Stage II vs Stage I (TCGA-SKCM)\nwith Significant Sites and Transcriptomic DE Genes Highlighted") +
+  theme_bw() +
+  theme(legend.position = "top")
+```
+
+YES KEEP - stages 2 to 3 spearman correlation bar graph 
+```{r}
+library(ggplot2)
+library(dplyr)
+library(org.Hs.eg.db)
+
+sample_meta_23 <- as.data.frame(colData(rna_se)) %>%
+  mutate(
+    barcode = rownames(.),
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  ) %>%
+  filter(stage_simple %in% c("II", "III"),
+         !is.na(stage_simple))
+
+counts_sub_23 <- counts_mat[, sample_meta_23$barcode]
+keep_23 <- rowSums(counts_sub_23 >= 10) >= 5
+counts_sub_23 <- counts_sub_23[keep_23, ]
+
+ensembl_ids_23 <- gsub("\\..*", "", rownames(counts_sub_23))
+gene_symbols_23 <- mapIds(org.Hs.eg.db,
+                          keys      = ensembl_ids_23,
+                          column    = "SYMBOL",
+                          keytype   = "ENSEMBL",
+                          multiVals = "first")
+
+foxq1_idx_23 <- which(gene_symbols_23 == "FOXQ1")
+foxq1_counts_23 <- as.numeric(counts_sub_23[foxq1_idx_23[1], ])
+
+chromatin_genes <- c(
+  "SUZ12", "BMI1", "CBX7", "EED", "RNF2", "AEBP2",  # Polycomb
+  "DNMT3B",                                            # DNA Methylation
+  "KDM6A", "KDM5C",                                   # Histone Demethylase
+  "SETDB1",                                            # H3K9 Methyltransferase
+  "SIRT1", "HDAC3",                                   # Histone Deacetylase
+  "SMARCC1", "SETD2"                                  # Other
+)
+
+cor_results <- data.frame(gene = character(), r = numeric(),
+                          pval = numeric(), stringsAsFactors = FALSE)
+
+for (gene in chromatin_genes) {
+  gene_idx <- which(gene_symbols_23 == gene)
+  if (length(gene_idx) > 0) {
+    gene_counts <- as.numeric(counts_sub_23[gene_idx[1], ])
+    if (length(foxq1_counts_23) == length(gene_counts)) {
+      cor_test <- cor.test(foxq1_counts_23, gene_counts, method = "spearman")
+      cor_results <- rbind(cor_results,
+                           data.frame(gene = gene,
+                                      r    = round(cor_test$estimate, 4),
+                                      pval = cor_test$p.value,
+                                      stringsAsFactors = FALSE))
+    }
+  }
+}
+
+# ── 5. Keep only significant results and add direction ────────────────────────
+cor_results <- cor_results %>%
+  filter(pval < 0.05) %>%
+  mutate(
+    direction = case_when(
+      r < 0 ~ "Negative (potential FOXQ1 silencer)",
+      r > 0 ~ "Positive (co-expressed with FOXQ1)"
+    ),
+    sig_label = case_when(
+      pval < 0.001 ~ "***",
+      pval < 0.01  ~ "**",
+      pval < 0.05  ~ "*",
+      TRUE         ~ ""
+    )
+  ) %>%
+  arrange(r)
+
+cor_results$gene <- factor(cor_results$gene, levels = cor_results$gene)
+
+# ── 6. Plot ───────────────────────────────────────────────────────────────────
+ggplot(cor_results, aes(x = r, y = gene, fill = direction)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = sig_label,
+                x = ifelse(r >= 0, r + 0.004, r - 0.004)),
+            size = 4, vjust = 0.75) +
+  scale_fill_manual(values = c(
+    "Negative (potential FOXQ1 silencer)" = "firebrick",
+    "Positive (co-expressed with FOXQ1)"  = "steelblue"
+  ), name = "Direction") +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.8) +
+  xlab("Spearman r") +
+  ylab("") +
+  ggtitle("Spearman Correlation: Chromatin Regulators vs FOXQ1",
+          subtitle = "Stage II vs III (TCGA-SKCM) — * p<0.05  ** p<0.01  *** p<0.001") +
+  theme_bw() +
+  theme(
+    legend.position    = "right",
+    plot.subtitle      = element_text(size = 9),
+    axis.text.y        = element_text(size = 11, face = "bold"),
+    panel.grid.major.y = element_line(color = "grey90")
+  )
+```
+stage 1 to 2:
+
+
+spearman for genes that upregulate from 1 to 2:
+
+```{r}
+# Recreate Stage I vs II objects
+sample_meta_12 <- as.data.frame(colData(rna_se)) %>%
+  mutate(
+    barcode = rownames(.),
+    stage_simple = gsub("Stage ", "", ajcc_pathologic_stage),
+    stage_simple = gsub("[ABC]$", "", trimws(stage_simple))
+  ) %>%
+  filter(stage_simple %in% c("I", "II"),
+         !is.na(stage_simple))
+
+counts_sub_12 <- counts_mat[, sample_meta_12$barcode]
+keep_12 <- rowSums(counts_sub_12 >= 10) >= 5
+counts_sub_12 <- counts_sub_12[keep_12, ]
+
+library(org.Hs.eg.db)
+ensembl_ids_12 <- gsub("\\..*", "", rownames(counts_sub_12))
+gene_symbols_12 <- mapIds(org.Hs.eg.db,
+                          keys      = ensembl_ids_12,
+                          column    = "SYMBOL",
+                          keytype   = "ENSEMBL",
+                          multiVals = "first")
+
+# Recreate FOXQ1 counts for Stage I vs II
+foxq1_idx_12 <- which(gene_symbols_12 == "FOXQ1")
+foxq1_counts_12 <- as.numeric(counts_sub_12[foxq1_idx_12[1], ])
+
+activation_genes <- c("MITF", "SOX10", "PAX3", "TFAP2A",
+                      "YAP1", "TEAD1", "RUNX2", "SP1", "MYC",
+                      "CTNNB1", "WNT5A", "LEF1", "TCF7", "AXIN2",
+                      "EGFR", "MET", "IGF1R", "AKT1", "MAPK1",
+                      "TP53", "RB1", "PTEN", "CDKN2A", "KLF4")
+
+cor_activation <- data.frame(gene = character(), r = numeric(),
+                             pval = numeric(), stringsAsFactors = FALSE)
+
+for (gene in activation_genes) {
+  gene_idx <- which(gene_symbols_12 == gene)
+  if (length(gene_idx) > 0) {
+    gene_counts <- as.numeric(counts_sub_12[gene_idx[1], ])
+    if (length(foxq1_counts_12) == length(gene_counts)) {
+      cor_test <- cor.test(foxq1_counts_12, gene_counts, method = "spearman")
+      cor_activation <- rbind(cor_activation,
+                              data.frame(gene = gene,
+                                         r    = round(cor_test$estimate, 4),
+                                         pval = cor_test$p.value,
+                                         stringsAsFactors = FALSE))
+    }
+  }
+}
+
+
+```
+YES KEEP - spearman correlation
+```{r}
+cor_activation_sig <- cor_activation %>%
+  filter(pval < 0.05, r > 0) %>%  
+  mutate(
+    direction = "Positive (potential FOXQ1 activator)",
+    sig_label = case_when(
+      pval < 0.001 ~ "***",
+      pval < 0.01  ~ "**",
+      pval < 0.05  ~ "*",
+      TRUE         ~ ""
+    )
+  ) %>%
+  arrange(r)
+
+cor_activation_sig$gene <- factor(cor_activation_sig$gene, 
+                                   levels = cor_activation_sig$gene)
+
+ggplot(cor_activation_sig, aes(x = r, y = gene, fill = direction)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = sig_label, x = r + 0.01),
+            size = 4, vjust = 0.75) +
+  scale_fill_manual(values = c(
+    "Positive (potential FOXQ1 activator)" = "steelblue"
+  ), name = "Direction") +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.8) +
+  xlab("Spearman r") +
+  ylab("") +
+  ggtitle("Spearman Correlation: Signaling Genes vs FOXQ1",
+          subtitle = "Stage I vs II (TCGA-SKCM) — * p<0.05  ** p<0.01  *** p<0.001") +
+  theme_bw() +
+  theme(
+    legend.position    = "right",
+    plot.subtitle      = element_text(size = 9),
+    axis.text.y        = element_text(size = 11, face = "bold"),
+    panel.grid.major.y = element_line(color = "grey90")
+  )
+```
+
+OTHER GRAPHS 
+
+Lollipops
+
+```{r}
+library(maftools)
+
+maf_query <- GDCquery(
+  project = 'TCGA-SKCM',
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking")
+
+# GDCdownload(maf_query)  # already downloaded
+maf <- GDCprepare(maf_query)
+
+clinic$Tumor_Sample_Barcode <- clinic$bcr_patient_barcode
+
+maf_object <- read.maf(maf = maf, clinicalData = clinic, isTCGA = TRUE)
+
+stage_I_barcodes <- clinic$Tumor_Sample_Barcode[
+  grepl("Stage IA|Stage IB|Stage I$",
+        clinic$ajcc_pathologic_tumor_stage, ignore.case = TRUE)
+]
+
+stage_II_barcodes <- clinic$Tumor_Sample_Barcode[
+  grepl("Stage IIA|Stage IIB|Stage IIC|Stage II$",
+        clinic$ajcc_pathologic_tumor_stage, ignore.case = TRUE)
+]
+
+stage_III_barcodes <- clinic$Tumor_Sample_Barcode[
+  grepl("Stage IIIA|Stage IIIB|Stage IIIC|Stage III$",
+        clinic$ajcc_pathologic_tumor_stage, ignore.case = TRUE)
+]
+
+maf_stage_I   <- subsetMaf(maf = maf_object, tsb = stage_I_barcodes)
+maf_stage_II  <- subsetMaf(maf = maf_object, tsb = stage_II_barcodes)
+maf_stage_III <- subsetMaf(maf = maf_object, tsb = stage_III_barcodes)
+
+lollipopPlot2(m1 = maf_stage_I,
+              m2 = maf_stage_II,
+              gene = "FOXQ1",
+              m1_name = "Stage I",
+              m2_name = "Stage II")
+
+lollipopPlot2(m1 = maf_stage_II,
+              m2 = maf_stage_III,
+              gene = "FOXQ1",
+              m1_name = "Stage II",
+              m2_name = "Stage III")
+```
+KM plots
+
+```{r}
+
+```
 
 

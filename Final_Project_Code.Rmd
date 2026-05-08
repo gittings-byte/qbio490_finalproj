@@ -897,10 +897,377 @@ lollipopPlot2(m1 = maf_stage_II,
               m1_name = "Stage II",
               m2_name = "Stage III")
 ```
-KM plots
 
+KM SURVIVABILITY PLOTS FOR VARIOUS UPPER/LOWER BOUNDARIES OF FOXQ1 EXPRESSION + COX TEST
 ```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+library(SummarizedExperiment)
+library(org.Hs.eg.db)
 
+# Make sure os_time and os_event exist in clinic
+clinic <- clinic %>%
+  mutate(
+    death_days_to        = as.numeric(death_days_to),
+    last_contact_days_to = as.numeric(last_contact_days_to),
+    age_at_diagnosis     = as.numeric(age_at_diagnosis),
+    os_time  = ifelse(!is.na(death_days_to), death_days_to, last_contact_days_to),
+    os_event = ifelse(vital_status == "Dead", 1, 0)
+  )
+
+# Verify the columns exist
+cat("os_time exists:", "os_time" %in% colnames(clinic), "\n")
+cat("os_event exists:", "os_event" %in% colnames(clinic), "\n")
+
+# Recreate counts_mat if needed 
+if (!exists("rna_se")) {
+  query_rna <- GDCquery(
+    project = "TCGA-SKCM",
+    data.category = "Transcriptome Profiling",
+    data.type = "Gene Expression Quantification",
+    workflow.type = "STAR - Counts"
+  )
+  # GDCdownload(query_rna)
+  rna_se <- GDCprepare(query_rna)
+}
+
+counts_mat <- assay(rna_se, "unstranded")
+
+# Build gene symbol lookup 
+ensembl_ids_all <- gsub("\\..*", "", rownames(counts_mat))
+gene_symbols_all <- mapIds(org.Hs.eg.db,
+                           keys      = ensembl_ids_all,
+                           column    = "SYMBOL",
+                           keytype   = "ENSEMBL",
+                           multiVals = "first")
+
+# Helper: get log2 expression for a gene 
+get_gene_expr <- function(gene_symbol) {
+  row_idx <- which(gene_symbols_all == gene_symbol)
+  if (length(row_idx) == 0) stop(paste(gene_symbol, "not found in counts_mat"))
+  log2(as.numeric(counts_mat[row_idx[1], ]) + 1)
+}
+
+#Helper: build survival dataframe 
+build_surv_df <- function(gene_symbol, lower_pct = 0.25, upper_pct = 0.75) {
+  
+  # Restrict to Stage I/II patients
+  stage_i_ii_patients <- clinic %>%
+    mutate(stage_simple = gsub("Stage |[ABC]$", "", 
+                               trimws(ajcc_pathologic_tumor_stage))) %>%
+    filter(stage_simple %in% c("I", "II")) %>%
+    pull(bcr_patient_barcode)
+  
+  # Build expression dataframe
+  expr_df <- data.frame(
+    patient_id = substr(colnames(counts_mat), 1, 12),
+    expression = get_gene_expr(gene_symbol),
+    stringsAsFactors = FALSE
+  ) %>%
+    distinct(patient_id, .keep_all = TRUE) %>%
+    filter(patient_id %in% stage_i_ii_patients)
+  
+  # Join with survival data
+  surv_df <- expr_df %>%
+    inner_join(
+      clinic %>% dplyr::select(bcr_patient_barcode, os_time, os_event),
+      by = c("patient_id" = "bcr_patient_barcode")
+    ) %>%
+    filter(!is.na(os_time), !is.na(os_event), !is.na(expression))
+  
+  # Split into high/low groups by percentile
+  q <- quantile(surv_df$expression, c(lower_pct, upper_pct))
+  surv_df <- surv_df %>%
+    mutate(expression_group = case_when(
+      expression <= q[1] ~ "Low",
+      expression >= q[2] ~ "High",
+      TRUE ~ NA_character_
+    )) %>%
+    filter(!is.na(expression_group)) %>%
+    mutate(expression_group = factor(expression_group, levels = c("Low", "High")))
+  
+  cat("n Low =",  sum(surv_df$expression_group == "Low"),
+      " n High =", sum(surv_df$expression_group == "High"), "\n")
+  
+  return(surv_df)
+}
+
+#Helper: plot KM curve 
+plot_km <- function(gene_symbol, lower_pct = 0.25, upper_pct = 0.75) {
+  surv_df <- build_surv_df(gene_symbol, lower_pct, upper_pct)
+  fit <- survfit(Surv(os_time, os_event) ~ expression_group, data = surv_df)
+  
+  ggsurvplot(
+    fit, data = surv_df,
+    pval       = TRUE,
+    conf.int   = TRUE,
+    palette    = c("steelblue", "firebrick"),
+    xlim       = c(0, 3650),
+    break.time.by = 730,
+    title      = paste0("Overall Survival by ", gene_symbol, 
+                        " Expression\n(Stage I/II, top/bottom ",
+                        round((1 - upper_pct) * 100), "%)"),
+    xlab       = "Days",
+    ylab       = "Survival Probability",
+    legend.title = paste(gene_symbol, "Expression"),
+    legend.labs  = c("Low", "High")
+  )
+}
+
+#Run KM plots 
+plot_km("FOXQ1", 0.25, 0.75)
+plot_km("FOXQ1", 0.20, 0.80)
+plot_km("FOXQ1", 0.10, 0.90)
+
+#Cox proportional hazards model
+surv_df_cox <- build_surv_df("FOXQ1", 0.20, 0.80)
+
+# Add stage and age
+surv_df_cox <- surv_df_cox %>%
+  left_join(
+    clinic %>%
+      mutate(stage_simple = gsub("Stage |[ABC]$", "", 
+                                 trimws(ajcc_pathologic_tumor_stage))) %>%
+      dplyr::select(bcr_patient_barcode, stage_simple, 
+                    age = age_at_diagnosis),
+    by = c("patient_id" = "bcr_patient_barcode")
+  )
+
+cox_model <- coxph(Surv(os_time, os_event) ~ expression_group + stage_simple + age,
+                   data = surv_df_cox)
+summary(cox_model)
 ```
 
+POLYCOMB SIGNATURE KM PLOT 
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+
+#  Helper: get signature score across multiple genes 
+get_signature_score <- function(gene_symbols) {
+  expr_list <- lapply(gene_symbols, function(g) {
+    tryCatch(get_gene_expr(g), error = function(e) {
+      warning(paste(g, "not found in counts — excluded from signature"))
+      NULL
+    })
+  })
+  names(expr_list) <- gene_symbols
+  expr_list <- expr_list[!sapply(expr_list, is.null)]
+  if (length(expr_list) == 0) stop("None of the signature genes found in data")
+  
+  expr_matrix <- do.call(cbind, expr_list)
+  expr_z <- scale(expr_matrix)
+  signature_score <- rowMeans(expr_z, na.rm = TRUE)
+  
+  cat("Signature built from:", paste(names(expr_list), collapse = ", "), "\n")
+  return(signature_score)
+}
+
+# Helper: build survival dataframe for signature 
+build_surv_df_signature <- function(gene_symbols, lower_pct = 0.20, 
+                                    upper_pct = 0.80, stages = c("I", "II"), 
+                                    cutoff_days = NULL) {
+  patients <- clinic %>%
+    mutate(stage_simple = gsub("Stage |[ABC]$", "",
+                               trimws(ajcc_pathologic_tumor_stage))) %>%
+    filter(stage_simple %in% stages) %>%
+    pull(bcr_patient_barcode)
+  
+  expr_df <- data.frame(
+    patient_id = substr(colnames(counts_mat), 1, 12),
+    expression = get_signature_score(gene_symbols),
+    stringsAsFactors = FALSE
+  ) %>%
+    distinct(patient_id, .keep_all = TRUE) %>%
+    filter(patient_id %in% patients)
+  
+  surv_df <- expr_df %>%
+    inner_join(
+      clinic %>% dplyr::select(bcr_patient_barcode, os_time, os_event),
+      by = c("patient_id" = "bcr_patient_barcode")
+    ) %>%
+    filter(!is.na(os_time), !is.na(os_event), !is.na(expression))
+  
+  if (!is.null(cutoff_days)) {
+    surv_df <- surv_df %>%
+      mutate(
+        os_event = ifelse(os_time > cutoff_days, 0, os_event),
+        os_time  = pmin(os_time, cutoff_days)
+      )
+  }
+  
+  q <- quantile(surv_df$expression, c(lower_pct, upper_pct))
+  surv_df <- surv_df %>%
+    mutate(expression_group = case_when(
+      expression <= q[1] ~ "Low",
+      expression >= q[2] ~ "High",
+      TRUE ~ NA_character_
+    )) %>%
+    filter(!is.na(expression_group)) %>%
+    mutate(expression_group = factor(expression_group, levels = c("Low", "High")))
+  
+  cat("n Low =",  sum(surv_df$expression_group == "Low"),
+      " n High =", sum(surv_df$expression_group == "High"), "\n")
+  
+  return(surv_df)
+}
+
+# Helper: plot KM curve for signature 
+plot_km_signature <- function(gene_symbols, lower_pct = 0.20, upper_pct = 0.80,
+                              stages = c("I", "II"), cutoff_days = NULL,
+                              score_name = "Polycomb") {
+  surv_df <- build_surv_df_signature(gene_symbols, lower_pct, upper_pct, 
+                                     stages, cutoff_days)
+  fit <- survfit(Surv(os_time, os_event) ~ expression_group, data = surv_df)
+  
+  ggsurvplot(
+    fit, data = surv_df,
+    pval          = TRUE,
+    conf.int      = TRUE,
+    palette       = c("steelblue", "firebrick"),
+    xlim          = c(0, ifelse(is.null(cutoff_days), 3650, cutoff_days)),
+    break.time.by = 365,
+    title         = paste0("Overall Survival by ", score_name, 
+                           " Signature\n(Stage ",
+                           paste(stages, collapse = "/"), ", top/bottom ",
+                           round((1 - upper_pct) * 100), "%)"),
+    xlab          = "Days",
+    ylab          = "Survival Probability",
+    legend.title  = paste(score_name, "Score"),
+    legend.labs   = c("Low", "High")
+  )
+}
+
+# Run KM plots 
+polycomb_genes <- c("SUZ12", "EZH2", "BMI1", "CBX7")
+
+# Stage I/II
+plot_km_signature(polycomb_genes, lower_pct = 0.20, upper_pct = 0.80,
+                  stages = c("I", "II"))
+
+# Stage I/II/III
+plot_km_signature(polycomb_genes, lower_pct = 0.20, upper_pct = 0.80,
+                  stages = c("I", "II", "III"))
+
+# Stage II/III
+plot_km_signature(polycomb_genes, lower_pct = 0.20, upper_pct = 0.80,
+                  stages = c("II", "III"))
+
+# Cox proportional hazards model
+surv_df_poly <- build_surv_df_signature(polycomb_genes, 
+                                        lower_pct = 0.20, upper_pct = 0.80,
+                                        stages = c("I", "II"))
+
+surv_df_poly <- surv_df_poly %>%
+  left_join(
+    clinic %>%
+      mutate(stage_simple = gsub("Stage |[ABC]$", "",
+                                 trimws(ajcc_pathologic_tumor_stage))) %>%
+      dplyr::select(bcr_patient_barcode, stage_simple, age = age_at_diagnosis),
+    by = c("patient_id" = "bcr_patient_barcode")
+  ) %>%
+  mutate(age = as.numeric(age))
+
+cox_polycomb <- coxph(Surv(os_time, os_event) ~ expression_group + stage_simple + age,
+                      data = surv_df_poly)
+summary(cox_polycomb)
+```
+
+ESCAPE SCORE KM PLOT 
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+
+# Build combined_df from scratch 
+polycomb_genes <- c("SUZ12", "EZH2", "BMI1", "CBX7")
+
+# Get polycomb signature score for all samples
+polycomb_score <- get_signature_score(polycomb_genes)
+
+# Get FOXQ1 expression for all samples
+foxq1_expr <- get_gene_expr("FOXQ1")
+
+# Build combined dataframe
+combined_df <- data.frame(
+  patient_id = substr(colnames(counts_mat), 1, 12),
+  polycomb   = polycomb_score,
+  foxq1      = foxq1_expr,
+  stringsAsFactors = FALSE
+) %>%
+  distinct(patient_id, .keep_all = TRUE) %>%
+  inner_join(
+    clinic %>% dplyr::select(bcr_patient_barcode, os_time, os_event),
+    by = c("patient_id" = "bcr_patient_barcode")
+  ) %>%
+  filter(!is.na(os_time), !is.na(os_event))
+
+# Calculate escape score 
+combined_df <- combined_df %>%
+  mutate(
+    poly_z       = as.numeric(scale(polycomb)),
+    foxq1_z      = as.numeric(scale(foxq1)),
+    escape_score = foxq1_z - poly_z  # high = FOXQ1 escapes Polycomb silencing
+  )
+
+# Split into high/low escape groups
+q <- quantile(combined_df$escape_score, c(0.25, 0.75))
+
+combined_df <- combined_df %>%
+  mutate(escape_group = factor(
+    case_when(
+      escape_score >= q[2] ~ "High Escape",
+      escape_score <= q[1] ~ "Low Escape",
+      TRUE ~ NA_character_
+    ),
+    levels = c("Low Escape", "High Escape")
+  ))
+
+# KM plot 
+surv_escape <- combined_df %>% filter(!is.na(escape_group))
+
+fit_escape <- survfit(Surv(os_time, os_event) ~ escape_group, 
+                      data = surv_escape)
+
+ggsurvplot(
+  fit_escape, data = surv_escape,
+  pval          = TRUE,
+  conf.int      = TRUE,
+  palette       = c("steelblue", "firebrick"),
+  xlim          = c(0, 3650),
+  break.time.by = 730,
+  title         = "Survival by FOXQ1-Polycomb Escape Score\n(All Stages TCGA-SKCM)",
+  xlab          = "Days",
+  ylab          = "Survival Probability",
+  legend.title  = "Escape Score",
+  legend.labs   = c("Low (Polycomb dominant)", "High (FOXQ1 escapes)")
+)
+
+#Cox model 
+clinic_clean <- clinic %>%
+  mutate(
+    stage_simple = gsub("Stage |[ABC]$", "", trimws(ajcc_pathologic_tumor_stage)),
+    age          = as.numeric(age_at_diagnosis)
+  ) %>%
+  dplyr::select(bcr_patient_barcode, stage_simple, age)
+
+combined_df_full <- combined_df %>%
+  dplyr::select(-any_of(c("stage_simple", "age", 
+                           "stage_simple.x", "stage_simple.y", 
+                           "age.x", "age.y"))) %>%
+  left_join(clinic_clean, by = c("patient_id" = "bcr_patient_barcode"))
+
+# Verify columns
+cat("Columns in combined_df_full:\n")
+print(colnames(combined_df_full))
+
+# Run Cox
+cox_escape <- coxph(
+  Surv(os_time, os_event) ~ escape_score + stage_simple + age,
+  data = combined_df_full
+)
+summary(cox_escape)
+```
 
